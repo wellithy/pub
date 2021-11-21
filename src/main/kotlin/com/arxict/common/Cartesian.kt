@@ -15,6 +15,12 @@ typealias CartesianProduct = Sequence<Tuple>
 private val emptyTuple: Tuple = emptySequence()
 private val zeroDCartesianProduct: CartesianProduct = sequenceOf(emptyTuple)
 
+val <T> T.asSingleton: Tuple
+    get() = sequenceOf(this)
+
+val <T> Family<T>.asCartesianProduct: CartesianProduct
+    get() = map { it.asSingleton }
+
 fun <T> Family<T>.toCartesianProduct(tuple: Tuple): CartesianProduct =
     map(tuple::plus)
 
