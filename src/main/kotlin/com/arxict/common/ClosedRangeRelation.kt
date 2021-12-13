@@ -1,4 +1,9 @@
+/**
+ * Describe the relation between ClosedRange.  Provides methods merge of one or more ranges.
+ */
 package com.arxict.common
+
+import java.util.*
 
 enum class ClosedRangeRelation {
     EMPTY,
@@ -12,37 +17,49 @@ enum class ClosedRangeRelation {
     ;
 
     companion object {
-        fun <T : Comparable<T>, R : ClosedRange<T>> of(r1: R, r2: R): ClosedRangeRelation {
-            val s1 = r1.start
-            val e1 = r1.endInclusive
-            val s2 = r2.start
-            val e2 = r2.endInclusive
-            return when {
-                // It's critical to apply these conditions in the following _*specific order*_
-                //    Equivalent Condition                  Relative Position
-                r1.isEmpty() || r2.isEmpty() -> EMPTY  //  e1 < s1 || e2 < s2
-                r1 == r2 -> EQUALS                     //  s1==s2 && e1==e2
-                e2 < s1 -> AFTER                       //  s2 <= e2 <  s1 <= e1
-                e1 < s2 -> BEFORE                      //  s1 <= e1 <  s2 <= e2
-                s2 in r1 && e2 in r1 -> CONTAINS       //  s1 <= s2 <= e2 <= e1
-                s1 in r2 && e1 in r2 -> CONTAINED      //  s2 <= s1 <= e1 <= e2
-                s2 in r1 && e1 < e2 -> OVERLAPS        //  s1 <= s2 <= e1 <  e2
-                s1 in r2 && e2 < e1 -> OVERLAPPED      //  s2 <= s1 <= e2 <  e1
-                else -> error("Unhandled condition")
-            }
+        private infix fun <T : Comparable<T>, R : ClosedRange<T>> R.after(r: R): Boolean =
+            r.endInclusive < start
+
+        private infix fun <T : Comparable<T>, R : ClosedRange<T>> R.contains(r: R): Boolean =
+            r.start in this && r.endInclusive in this
+
+        private infix fun <T : Comparable<T>, R : ClosedRange<T>> R.overlaps(r: R): Boolean =
+            r.start in this && endInclusive < r.endInclusive
+
+        fun <T : Comparable<T>, R : ClosedRange<T>> of(r1: R, r2: R): ClosedRangeRelation = when {
+            /* It's critical to apply these conditions in the following _*specific order*_
+                 Condition              Pre-Condition                   Relative Position
+              r1 after    r2   !( EMPTY || EQUALS )                    s2 <= e2 <  s1 <= e1
+              r1 contains r2   !( r1 after r2 || r2 after r1 )         s1 <= s2 <= e2 <= e1
+              r1 overlaps r2   !( r1 contains r2 || r2 contains r1 )   s1 <= s2 <= e1 <  e2
+             */
+            r1.isEmpty() || r2.isEmpty() -> EMPTY
+            r1 == r2 -> EQUALS
+            r1 after r2 -> AFTER
+            r2 after r1 -> BEFORE
+            r1 contains r2 -> CONTAINS
+            r2 contains r1 -> CONTAINED
+            r1 overlaps r2 -> OVERLAPS
+            r2 overlaps r1 -> OVERLAPPED
+            else -> error("Unhandled condition")
         }
+
+        private val REVERSE = EnumMap(
+            mapOf(
+                EMPTY to EMPTY,
+                EQUALS to EQUALS,
+                AFTER to BEFORE,
+                BEFORE to AFTER,
+                CONTAINS to CONTAINED,
+                CONTAINED to CONTAINS,
+                OVERLAPS to OVERLAPPED,
+                OVERLAPPED to OVERLAPS,
+            )
+        )
     }
 
-    fun reverse(): ClosedRangeRelation = when (this) {
-        EMPTY -> EMPTY
-        EQUALS -> EQUALS
-        AFTER -> BEFORE
-        BEFORE -> AFTER
-        CONTAINS -> CONTAINED
-        CONTAINED -> CONTAINS
-        OVERLAPS -> OVERLAPPED
-        OVERLAPPED -> OVERLAPS
-    }
+    fun reverse(): ClosedRangeRelation =
+        REVERSE[this]!!
 }
 
 fun <T : Comparable<T>, R : ClosedRange<T>> R.canMerge(other: R, allowReverse: Boolean = false): Boolean =
@@ -52,33 +69,34 @@ fun <T : Comparable<T>, R : ClosedRange<T>> R.canMerge(other: R, allowReverse: B
         else -> false
     }
 
+private operator fun <T : Comparable<T>, R : ClosedRange<T>> R.plus(r2: R): ClosedRange<T> =
+    start..r2.endInclusive
+
 fun <T : Comparable<T>, R : ClosedRange<T>> R.merge(r2: R, allowReverse: Boolean = false): ClosedRange<T>? =
     when (ClosedRangeRelation.of(this, r2)) {
         ClosedRangeRelation.EQUALS, ClosedRangeRelation.CONTAINS -> this
-        ClosedRangeRelation.OVERLAPS -> start..r2.endInclusive
+        ClosedRangeRelation.OVERLAPS -> this + r2
         ClosedRangeRelation.CONTAINED -> if (allowReverse) r2 else null
-        ClosedRangeRelation.OVERLAPPED -> if (allowReverse) r2.start..endInclusive else null
+        ClosedRangeRelation.OVERLAPPED -> if (allowReverse) r2 + this else null
         else -> null
     }
 
-fun <T : Comparable<T>> Iterator<ClosedRange<T>>.merge(): Iterator<ClosedRange<T>> {
-    val myself = this
-    var last: ClosedRange<T>? = null
-    return object : AbstractIterator<ClosedRange<T>>() {
+fun <T : Comparable<T>> Iterator<ClosedRange<T>>.merge(): Iterator<ClosedRange<T>> =
+    object : AbstractIterator<ClosedRange<T>>() {
+        val myself = this@merge
+        var last: ClosedRange<T>? = null
         override fun computeNext() {
-            if (!myself.hasNext()) return done()
-            val current = last ?: myself.next()
+            var r1 = last ?: if (myself.hasNext()) myself.next() else return done()
             last = null
-            var finish = current.endInclusive
-            var prevStart = current.start
-            while (last == null && myself.hasNext())
-                myself.next().apply {
-                    require(start >= prevStart) { "Can't merge unsorted ClosedRange: $prevStart is followed by $start" }
-                    prevStart = start
-                    if (finish >= start) finish = endInclusive
-                    else last = this
+            for (r2 in myself) when (ClosedRangeRelation.of(r1, r2)) {
+                ClosedRangeRelation.EQUALS, ClosedRangeRelation.CONTAINS -> continue
+                ClosedRangeRelation.OVERLAPS -> r1 += r2
+                ClosedRangeRelation.BEFORE -> {
+                    last = r2
+                    break
                 }
-            setNext(current.start..finish)
+                else -> error("Can't merge : $r2 into $r1")
+            }
+            setNext(r1)
         }
     }
-}

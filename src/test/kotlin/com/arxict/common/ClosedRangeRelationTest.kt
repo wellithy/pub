@@ -1,5 +1,6 @@
 package com.arxict.common
 
+import java.time.LocalDate
 import kotlin.test.*
 
 internal class ClosedRangeRelationTest {
@@ -24,15 +25,14 @@ internal class ClosedRangeRelationTest {
         }
 
         fun basicValidation(s1: Int, e1: Int, s2: Int, e2: Int): ClosedRangeRelation {
-            val r1 = (s1..e1)
-            val r2 = (s2..e2)
-            val relation = ClosedRangeRelation.of(r1, r2)
-            assertNotNull(relation)
-            when {
-                r1.isEmpty() || r2.isEmpty() -> assertEquals(ClosedRangeRelation.EMPTY, relation)
-                r1 == r2 -> assertEquals(ClosedRangeRelation.EQUALS, relation)
+            val r1 = s1..e1
+            val r2 = s2..e2
+            return ClosedRangeRelation.of(r1, r2).also {
+                when {
+                    r1.isEmpty() || r2.isEmpty() -> assertEquals(ClosedRangeRelation.EMPTY, it)
+                    r1 == r2 -> assertEquals(ClosedRangeRelation.EQUALS, it)
+                }
             }
-            return relation
         }
 
         fun <T : Comparable<T>> Sequence<ClosedRange<T>>.merge(): Sequence<ClosedRange<T>> =
@@ -46,6 +46,8 @@ internal class ClosedRangeRelationTest {
             forEach { it.assertSameRange(iterator.next()) }
             assertFalse { iterator.hasNext() }
         }
+
+        fun date(y: Int, month: Int): LocalDate = LocalDate.of(2000 + y, month, 1)
     }
 
     @Test
@@ -60,31 +62,38 @@ internal class ClosedRangeRelationTest {
         validate(ClosedRangeRelation.OVERLAPS, true, false, 1, 5, 2, 6)
     }
 
+    /*
+     s1   1                        0
+     e1   3            -4          0          +4
+     s2   7      -6    -4    -2    0    +2    +4    +6
+     e2  15   -7 -6 -5 -4 -3 -2 -1 0 +1 +2 +3 +4 +5 +6 +7
+        315
+     */
     @Test
     fun `check all combinations`() {
         var count = 0
-        val s1 = 1234 // 2^1 - 1=1
+        val s1 = 0
         val stats = mutableMapOf<ClosedRangeRelation, Int>()
-        ((s1 - 4)..(s1 + 4) step 4).forEach { e1 -> // 2^2 - 1 = 3
-            ((s1 - 4 - 2)..(s1 + 4 + 2) step 2).forEach { s2 -> // 2^3 - 1 = 7
-                ((s1 - 4 - 2 - 1)..(s1 + 4 + 2 + 1)).forEach { e2 -> // 2^4 - 1  = 15
+        ((s1 - 4)..(s1 + 4) step 4).forEach { e1 ->
+            ((s1 - 4 - 2)..(s1 + 4 + 2) step 2).forEach { s2 ->
+                ((s1 - 4 - 2 - 1)..(s1 + 4 + 2 + 1)).forEach { e2 ->
                     count++
                     stats.merge(basicValidation(s1, e1, s2, e2), 1, Int::plus)
                 }
             }
         }
-        assertEquals(1 * 3 * 7 * 15, count) // 3*7*15 = 315
+        assertEquals(3 * 7 * 15, count)
         assertEquals(count, stats.values.sum())
         assertEquals(
             mapOf(
-                ClosedRangeRelation.EMPTY to 203,
+                ClosedRangeRelation.EMPTY to 203, // 1*7*15 + 7*(1+2*6/2)
                 ClosedRangeRelation.CONTAINED to 46,
                 ClosedRangeRelation.AFTER to 24,
                 ClosedRangeRelation.BEFORE to 14,
                 ClosedRangeRelation.OVERLAPPED to 12,
                 ClosedRangeRelation.CONTAINS to 8,
                 ClosedRangeRelation.OVERLAPS to 6,
-                ClosedRangeRelation.EQUALS to 2,
+                ClosedRangeRelation.EQUALS to 2, // 0..0 & 0..4
             ), stats
         )
     }
@@ -117,17 +126,37 @@ internal class ClosedRangeRelationTest {
     @Test
     fun `simple merge sequence`() {
         (1..9).assertSameRange(sequenceOf(1..3, 2..5, 5..9).merge().single())
+        (date(1, 1)..date(2,4))
+            .assertSameRange(sequenceOf(
+                date(1,1)..date(1,5),
+                date(1,2)..date(2, 2),
+                date(2,1)..date(2,4)
+            ).merge().single())
     }
 
     @Test
     fun `merge sequence`() {
-        sequenceOf(1..5, 7..12).assertSameSequence(sequenceOf(1..3, 2..5, 7..9, 8..12).merge())
+        sequenceOf(1..5, 7..12, 13..14, 15..16).assertSameSequence(
+            sequenceOf(
+                1..3,
+                2..5,
+                7..9,
+                8..12,
+                13..14,
+                15..16
+            ).merge()
+        )
     }
 
     @Test
     fun `invalid merge sequence`() {
-        assertFails { sequenceOf(2..5, 1..3).merge().count() }
-        assertFails { sequenceOf(2..5, 4..7, 3..8).merge().count() }
+        sequenceOf(
+            sequenceOf(2..5, 1..3),
+            sequenceOf(2..5, 4..7, 1..8),
+            sequenceOf(2..6, 4..7, 0..7),
+        ).forEach {
+            assertFails { it.merge().count() }
+        }
     }
 
 }
